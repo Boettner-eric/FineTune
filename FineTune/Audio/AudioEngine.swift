@@ -11,6 +11,12 @@ final class AudioEngine {
     private var taps: [pid_t: ProcessTapController] = [:]
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioEngine")
 
+    init() {
+        Task { @MainActor in
+            monitor.start()
+        }
+    }
+
     var apps: [AudioApp] {
         monitor.activeApps
     }

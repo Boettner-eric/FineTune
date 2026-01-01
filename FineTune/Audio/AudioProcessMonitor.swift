@@ -22,6 +22,8 @@ final class AudioProcessMonitor {
     )
 
     func start() {
+        guard processListListenerBlock == nil else { return }
+
         logger.debug("Starting audio process monitor")
 
         // Initial refresh
