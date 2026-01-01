@@ -3,16 +3,17 @@ import SwiftUI
 
 struct AppVolumeRowView: View {
     let app: AudioApp
-    let volume: Float
+    let volume: Float  // Linear gain 0-2
     let onVolumeChange: (Float) -> Void
 
-    @State private var sliderValue: Double
+    @State private var sliderValue: Double  // 0-1, log-mapped position
 
     init(app: AudioApp, volume: Float, onVolumeChange: @escaping (Float) -> Void) {
         self.app = app
         self.volume = volume
         self.onVolumeChange = onVolumeChange
-        self._sliderValue = State(initialValue: Double(volume))
+        // Convert linear gain to slider position
+        self._sliderValue = State(initialValue: VolumeMapping.gainToSlider(volume))
     }
 
     var body: some View {
@@ -29,16 +30,18 @@ struct AppVolumeRowView: View {
             Slider(value: $sliderValue, in: 0...1)
                 .frame(minWidth: 100)
                 .onChange(of: sliderValue) { _, newValue in
-                    onVolumeChange(Float(newValue))
+                    let gain = VolumeMapping.sliderToGain(newValue)
+                    onVolumeChange(gain)
                 }
 
-            Text("\(Int(sliderValue * 100))%")
+            // Show linear percentage (0-200%)
+            Text("\(VolumeMapping.gainToPercentage(VolumeMapping.sliderToGain(sliderValue)))%")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 35, alignment: .trailing)
+                .frame(width: 45, alignment: .trailing)
         }
         .onChange(of: volume) { _, newValue in
-            sliderValue = Double(newValue)
+            sliderValue = VolumeMapping.gainToSlider(newValue)
         }
     }
 }
