@@ -6,6 +6,7 @@ import Foundation
 
 extension AudioObjectID {
     static let unknown = AudioObjectID(kAudioObjectUnknown)
+    static let system = AudioObjectID(kAudioObjectSystemObject)
 
     var isValid: Bool { self != Self.unknown }
 }
