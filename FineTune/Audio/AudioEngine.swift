@@ -99,7 +99,6 @@ final class AudioEngine {
     func applyPersistedSettings() {
         for app in apps {
             guard !appliedPIDs.contains(app.id) else { continue }
-            appliedPIDs.insert(app.id)
 
             // Load saved device routing
             let savedDeviceUID = settingsManager.getDeviceRouting(for: app.persistenceIdentifier)
@@ -110,6 +109,11 @@ final class AudioEngine {
 
             // Always create tap for audio apps (always-on strategy)
             ensureTapExists(for: app, deviceUID: savedDeviceUID)
+
+            // Only mark as applied if tap was successfully created
+            // This allows retry on next applyPersistedSettings() call if tap failed
+            guard taps[app.id] != nil else { continue }
+            appliedPIDs.insert(app.id)
 
             if let volume = savedVolume {
                 let displayPercent = Int(VolumeMapping.gainToSlider(volume) * 200)
