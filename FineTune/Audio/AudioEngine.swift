@@ -54,6 +54,21 @@ final class AudioEngine {
         processMonitor.activeApps
     }
 
+    /// Audio levels for all active apps (for VU meter visualization)
+    /// Returns a dictionary mapping PID to peak audio level (0-1)
+    var audioLevels: [pid_t: Float] {
+        var levels: [pid_t: Float] = [:]
+        for (pid, tap) in taps {
+            levels[pid] = tap.audioLevel
+        }
+        return levels
+    }
+
+    /// Get audio level for a specific app
+    func getAudioLevel(for app: AudioApp) -> Float {
+        taps[app.id]?.audioLevel ?? 0.0
+    }
+
     func start() {
         // Monitors have internal guards against double-starting
         processMonitor.start()

@@ -9,88 +9,54 @@ struct MenuBarPopupView: View {
     @State private var sortedDevices: [AudioDevice] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Output Devices header
-            Text("Output Devices")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Output Devices section
+            SectionHeader(title: "Output Devices")
+                .padding(.bottom, DesignTokens.Spacing.xs)
 
-            // Device rows
             ForEach(sortedDevices) { device in
-                DeviceVolumeRowView(
+                DeviceRow(
                     device: device,
+                    isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
                     volume: deviceVolumeMonitor.volumes[device.id] ?? 1.0,
                     isMuted: deviceVolumeMonitor.muteStates[device.id] ?? false,
-                    isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
+                    onSetDefault: {
+                        deviceVolumeMonitor.setDefaultDevice(device.id)
+                    },
                     onVolumeChange: { volume in
                         deviceVolumeMonitor.setVolume(for: device.id, to: volume)
                     },
                     onMuteToggle: {
                         let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
                         deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
-                    },
-                    onSetAsDefault: {
-                        deviceVolumeMonitor.setDefaultDevice(device.id)
                     }
                 )
             }
 
             Divider()
+                .padding(.vertical, DesignTokens.Spacing.xs)
 
+            // Apps section
             if audioEngine.apps.isEmpty {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "speaker.slash")
-                            .font(.title)
-                            .foregroundStyle(.secondary)
-                        Text("No apps playing audio")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                emptyStateView
             } else {
-                // Apps header
-                Text("Apps")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(audioEngine.apps) { app in
-                            if let deviceUID = audioEngine.getDeviceUID(for: app) {
-                                AppVolumeRowView(
-                                    app: app,
-                                    volume: audioEngine.getVolume(for: app),
-                                    onVolumeChange: { volume in
-                                        audioEngine.setVolume(for: app, to: volume)
-                                    },
-                                    devices: audioEngine.outputDevices,
-                                    selectedDeviceUID: deviceUID,
-                                    onDeviceSelected: { newDeviceUID in
-                                        audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 400)
+                appsSection
             }
 
             Divider()
+                .padding(.vertical, DesignTokens.Spacing.xs)
 
+            // Quit button
             Button("Quit FineTune") {
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .font(.caption)
+            .foregroundStyle(DesignTokens.Colors.textTertiary)
+            .font(DesignTokens.Typography.caption)
         }
-        .padding()
-        .frame(width: 520)
+        .padding(DesignTokens.Spacing.lg)
+        .frame(width: DesignTokens.Dimensions.popupWidth)
+        .background(.ultraThinMaterial)
         .onAppear {
             updateSortedDevices()
         }
@@ -102,6 +68,56 @@ struct MenuBarPopupView: View {
         }
     }
 
+    // MARK: - Subviews
+
+    @ViewBuilder
+    private var emptyStateView: some View {
+        HStack {
+            Spacer()
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "speaker.slash")
+                    .font(.title)
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+                Text("No apps playing audio")
+                    .font(.callout)
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, DesignTokens.Spacing.xl)
+    }
+
+    @ViewBuilder
+    private var appsSection: some View {
+        SectionHeader(title: "Apps")
+            .padding(.bottom, DesignTokens.Spacing.xs)
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(audioEngine.apps) { app in
+                    if let deviceUID = audioEngine.getDeviceUID(for: app) {
+                        AppRowWithLevelPolling(
+                            app: app,
+                            volume: audioEngine.getVolume(for: app),
+                            devices: audioEngine.outputDevices,
+                            selectedDeviceUID: deviceUID,
+                            getAudioLevel: { audioEngine.getAudioLevel(for: app) },
+                            onVolumeChange: { volume in
+                                audioEngine.setVolume(for: app, to: volume)
+                            },
+                            onDeviceSelected: { newDeviceUID in
+                                audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: DesignTokens.Dimensions.maxScrollHeight)
+    }
+
+    // MARK: - Helpers
+
     /// Recomputes sorted devices - called only when dependencies change
     private func updateSortedDevices() {
         let devices = audioEngine.outputDevices
@@ -110,6 +126,57 @@ struct MenuBarPopupView: View {
             if lhs.id == defaultID { return true }
             if rhs.id == defaultID { return false }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+}
+
+// MARK: - Previews
+
+#Preview("Menu Bar Popup") {
+    // Note: This preview requires mock AudioEngine and DeviceVolumeMonitor
+    // For now, just show the structure
+    PreviewContainer {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            SectionHeader(title: "Output Devices")
+                .padding(.bottom, DesignTokens.Spacing.xs)
+
+            ForEach(MockData.sampleDevices.prefix(2)) { device in
+                DeviceRow(
+                    device: device,
+                    isDefault: device == MockData.sampleDevices[0],
+                    volume: 0.75,
+                    isMuted: false,
+                    onSetDefault: {},
+                    onVolumeChange: { _ in },
+                    onMuteToggle: {}
+                )
+            }
+
+            Divider()
+                .padding(.vertical, DesignTokens.Spacing.xs)
+
+            SectionHeader(title: "Apps")
+                .padding(.bottom, DesignTokens.Spacing.xs)
+
+            ForEach(MockData.sampleApps.prefix(3)) { app in
+                AppRow(
+                    app: app,
+                    volume: Float.random(in: 0.5...1.5),
+                    audioLevel: Float.random(in: 0...0.7),
+                    devices: MockData.sampleDevices,
+                    selectedDeviceUID: MockData.sampleDevices[0].uid,
+                    onVolumeChange: { _ in },
+                    onDeviceSelected: { _ in }
+                )
+            }
+
+            Divider()
+                .padding(.vertical, DesignTokens.Spacing.xs)
+
+            Button("Quit FineTune") {}
+                .buttonStyle(.plain)
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .font(DesignTokens.Typography.caption)
         }
     }
 }

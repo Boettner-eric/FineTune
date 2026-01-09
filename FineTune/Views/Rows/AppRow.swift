@@ -1,0 +1,191 @@
+// FineTune/Views/Rows/AppRow.swift
+import SwiftUI
+import Combine
+
+/// A row displaying an app with volume controls and VU meter
+/// Used in the Apps section
+struct AppRow: View {
+    let app: AudioApp
+    let volume: Float  // Linear gain 0-2
+    let audioLevel: Float
+    let devices: [AudioDevice]
+    let selectedDeviceUID: String
+    let onVolumeChange: (Float) -> Void
+    let onDeviceSelected: (String) -> Void
+
+    @State private var sliderValue: Double  // 0-1, log-mapped position
+    @State private var isEditing = false
+
+    init(
+        app: AudioApp,
+        volume: Float,
+        audioLevel: Float = 0,
+        devices: [AudioDevice],
+        selectedDeviceUID: String,
+        onVolumeChange: @escaping (Float) -> Void,
+        onDeviceSelected: @escaping (String) -> Void
+    ) {
+        self.app = app
+        self.volume = volume
+        self.audioLevel = audioLevel
+        self.devices = devices
+        self.selectedDeviceUID = selectedDeviceUID
+        self.onVolumeChange = onVolumeChange
+        self.onDeviceSelected = onDeviceSelected
+        // Convert linear gain to slider position
+        self._sliderValue = State(initialValue: VolumeMapping.gainToSlider(volume))
+    }
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            // App icon
+            Image(nsImage: app.icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: DesignTokens.Dimensions.iconSize, height: DesignTokens.Dimensions.iconSize)
+
+            // App name
+            Text(app.name)
+                .font(DesignTokens.Typography.rowName)
+                .lineLimit(1)
+                .frame(width: 80, alignment: .leading)
+
+            // Volume slider with unity marker
+            MinimalSlider(
+                value: $sliderValue,
+                showUnityMarker: true,
+                onEditingChanged: { editing in
+                    isEditing = editing
+                }
+            )
+            .onChange(of: sliderValue) { _, newValue in
+                let gain = VolumeMapping.sliderToGain(newValue)
+                onVolumeChange(gain)
+            }
+
+            // Volume percentage (0-200% matching slider position)
+            Text("\(Int(sliderValue * 200))%")
+                .percentageStyle()
+
+            // VU Meter
+            VUMeter(level: audioLevel)
+
+            // Device picker
+            DevicePicker(
+                devices: devices,
+                selectedDeviceUID: selectedDeviceUID,
+                onDeviceSelected: onDeviceSelected
+            )
+        }
+        .hoverableRow()
+        .onChange(of: volume) { _, newValue in
+            // Only sync from external changes when user is NOT dragging
+            guard !isEditing else { return }
+            sliderValue = VolumeMapping.gainToSlider(newValue)
+        }
+    }
+}
+
+// MARK: - App Row with Timer-based Level Updates
+
+/// App row that polls audio levels at regular intervals
+struct AppRowWithLevelPolling: View {
+    let app: AudioApp
+    let volume: Float
+    let devices: [AudioDevice]
+    let selectedDeviceUID: String
+    let getAudioLevel: () -> Float
+    let onVolumeChange: (Float) -> Void
+    let onDeviceSelected: (String) -> Void
+
+    @State private var displayLevel: Float = 0
+    @State private var levelTimer: Timer?
+
+    var body: some View {
+        AppRow(
+            app: app,
+            volume: volume,
+            audioLevel: displayLevel,
+            devices: devices,
+            selectedDeviceUID: selectedDeviceUID,
+            onVolumeChange: onVolumeChange,
+            onDeviceSelected: onDeviceSelected
+        )
+        .onAppear {
+            startLevelPolling()
+        }
+        .onDisappear {
+            stopLevelPolling()
+        }
+    }
+
+    private func startLevelPolling() {
+        levelTimer = Timer.scheduledTimer(
+            withTimeInterval: DesignTokens.Timing.vuMeterUpdateInterval,
+            repeats: true
+        ) { _ in
+            displayLevel = getAudioLevel()
+        }
+    }
+
+    private func stopLevelPolling() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+    }
+}
+
+// MARK: - Previews
+
+#Preview("App Row") {
+    PreviewContainer {
+        VStack(spacing: 0) {
+            AppRow(
+                app: MockData.sampleApps[0],
+                volume: 1.0,
+                audioLevel: 0.65,
+                devices: MockData.sampleDevices,
+                selectedDeviceUID: MockData.sampleDevices[0].uid,
+                onVolumeChange: { _ in },
+                onDeviceSelected: { _ in }
+            )
+
+            AppRow(
+                app: MockData.sampleApps[1],
+                volume: 0.5,
+                audioLevel: 0.25,
+                devices: MockData.sampleDevices,
+                selectedDeviceUID: MockData.sampleDevices[1].uid,
+                onVolumeChange: { _ in },
+                onDeviceSelected: { _ in }
+            )
+
+            AppRow(
+                app: MockData.sampleApps[2],
+                volume: 1.5,
+                audioLevel: 0.85,
+                devices: MockData.sampleDevices,
+                selectedDeviceUID: MockData.sampleDevices[2].uid,
+                onVolumeChange: { _ in },
+                onDeviceSelected: { _ in }
+            )
+        }
+    }
+}
+
+#Preview("App Row - Multiple Apps") {
+    PreviewContainer {
+        VStack(spacing: 0) {
+            ForEach(MockData.sampleApps) { app in
+                AppRow(
+                    app: app,
+                    volume: Float.random(in: 0.5...1.5),
+                    audioLevel: Float.random(in: 0...0.8),
+                    devices: MockData.sampleDevices,
+                    selectedDeviceUID: MockData.sampleDevices.randomElement()!.uid,
+                    onVolumeChange: { _ in },
+                    onDeviceSelected: { _ in }
+                )
+            }
+        }
+    }
+}

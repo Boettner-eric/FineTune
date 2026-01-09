@@ -1,0 +1,133 @@
+// FineTune/Views/Rows/DeviceRow.swift
+import SwiftUI
+
+/// A row displaying a device with volume controls
+/// Used in the Output Devices section
+struct DeviceRow: View {
+    let device: AudioDevice
+    let isDefault: Bool
+    let volume: Float
+    let isMuted: Bool
+    let onSetDefault: () -> Void
+    let onVolumeChange: (Float) -> Void
+    let onMuteToggle: () -> Void
+
+    @State private var sliderValue: Double
+    @State private var isEditing = false
+
+    init(
+        device: AudioDevice,
+        isDefault: Bool,
+        volume: Float,
+        isMuted: Bool,
+        onSetDefault: @escaping () -> Void,
+        onVolumeChange: @escaping (Float) -> Void,
+        onMuteToggle: @escaping () -> Void
+    ) {
+        self.device = device
+        self.isDefault = isDefault
+        self.volume = volume
+        self.isMuted = isMuted
+        self.onSetDefault = onSetDefault
+        self.onVolumeChange = onVolumeChange
+        self.onMuteToggle = onMuteToggle
+        self._sliderValue = State(initialValue: Double(volume))
+    }
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            // Default device selector
+            RadioButton(isSelected: isDefault, action: onSetDefault)
+
+            // Device icon
+            Group {
+                if let icon = device.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: "speaker.wave.2")
+                }
+            }
+            .frame(width: DesignTokens.Dimensions.iconSize, height: DesignTokens.Dimensions.iconSize)
+
+            // Device name
+            Text(device.name)
+                .font(isDefault ? DesignTokens.Typography.rowNameBold : DesignTokens.Typography.rowName)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Mute button
+            IconButton(
+                systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                isActive: isMuted,
+                helpText: isMuted ? "Unmute" : "Mute",
+                action: onMuteToggle
+            )
+
+            // Volume slider
+            MinimalSlider(
+                value: $sliderValue,
+                onEditingChanged: { editing in
+                    isEditing = editing
+                }
+            )
+            .opacity(isMuted ? 0.5 : 1.0)
+            .onChange(of: sliderValue) { _, newValue in
+                onVolumeChange(Float(newValue))
+                // Auto-unmute when slider moved while muted
+                if isMuted && newValue > 0 {
+                    onMuteToggle()
+                }
+            }
+
+            // Volume percentage
+            Text("\(Int(sliderValue * 100))%")
+                .percentageStyle()
+        }
+        .hoverableRow()
+        .onChange(of: volume) { _, newValue in
+            // Only sync from external changes when user is NOT dragging
+            guard !isEditing else { return }
+            sliderValue = Double(newValue)
+        }
+    }
+}
+
+// MARK: - Previews
+
+#Preview("Device Row - Default") {
+    PreviewContainer {
+        VStack(spacing: 0) {
+            DeviceRow(
+                device: MockData.sampleDevices[0],
+                isDefault: true,
+                volume: 0.75,
+                isMuted: false,
+                onSetDefault: {},
+                onVolumeChange: { _ in },
+                onMuteToggle: {}
+            )
+
+            DeviceRow(
+                device: MockData.sampleDevices[1],
+                isDefault: false,
+                volume: 1.0,
+                isMuted: false,
+                onSetDefault: {},
+                onVolumeChange: { _ in },
+                onMuteToggle: {}
+            )
+
+            DeviceRow(
+                device: MockData.sampleDevices[2],
+                isDefault: false,
+                volume: 0.5,
+                isMuted: true,
+                onSetDefault: {},
+                onVolumeChange: { _ in },
+                onMuteToggle: {}
+            )
+        }
+    }
+}

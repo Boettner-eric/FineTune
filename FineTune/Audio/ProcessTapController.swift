@@ -45,6 +45,15 @@ final class ProcessTapController {
     // Computed as: sourceDeviceVolume / destinationDeviceVolume
     private nonisolated(unsafe) var _deviceVolumeCompensation: Float = 1.0
 
+    // Peak audio level for VU meter display (0-1 range)
+    // Written by audio callback, read by UI for visualization
+    // Uses simple max(abs(sample)) per buffer for efficiency
+    private nonisolated(unsafe) var _peakLevel: Float = 0.0
+
+    /// Current peak audio level (0-1) for VU meter visualization
+    /// Read from main thread, written from audio callback (atomic Float)
+    var audioLevel: Float { _peakLevel }
+
     // Ramp coefficient for ~30ms smoothing, computed from device sample rate on activation
     // Formula: 1 - exp(-1 / (sampleRate * rampTimeSeconds))
     private var rampCoefficient: Float = 0.0007  // Default, updated on activation
@@ -683,6 +692,9 @@ final class ProcessTapController {
 
         let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
 
+        // Track peak level for VU meter (RT-safe: simple max tracking)
+        var maxPeak: Float = 0.0
+
         // Copy input to output with ramped gain and soft limiting
         for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
             guard let inputData = inputBuffer.mData,
@@ -708,8 +720,19 @@ final class ProcessTapController {
                 }
 
                 outputSamples[i] = sample
+
+                // Track peak for VU meter (only for odd samples to reduce CPU - stereo interleaved)
+                if i & 1 == 0 {
+                    let absSample = abs(sample)
+                    if absSample > maxPeak {
+                        maxPeak = absSample
+                    }
+                }
             }
         }
+
+        // Store peak level for UI (atomic Float write)
+        _peakLevel = min(maxPeak, 1.0)
 
         // Store for next callback
         _primaryCurrentVolume = currentVol
