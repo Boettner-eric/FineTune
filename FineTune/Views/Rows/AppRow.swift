@@ -44,13 +44,13 @@ struct AppRow: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: DesignTokens.Dimensions.iconSize, height: DesignTokens.Dimensions.iconSize)
 
-            // App name
+            // App name - expands to fill available space so sliders align
             Text(app.name)
                 .font(DesignTokens.Typography.rowName)
                 .lineLimit(1)
-                .frame(width: 80, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Volume slider with unity marker
+            // Volume slider with unity marker - fixed width for alignment
             MinimalSlider(
                 value: $sliderValue,
                 showUnityMarker: true,
@@ -58,6 +58,7 @@ struct AppRow: View {
                     isEditing = editing
                 }
             )
+            .frame(width: 140)
             .onChange(of: sliderValue) { _, newValue in
                 let gain = VolumeMapping.sliderToGain(newValue)
                 onVolumeChange(gain)
