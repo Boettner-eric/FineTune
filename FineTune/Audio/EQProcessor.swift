@@ -1,42 +1,52 @@
+// FineTune/Audio/EQProcessor.swift
 import Foundation
 import Accelerate
 
 /// RT-safe 10-band graphic EQ processor using vDSP_biquad
 final class EQProcessor: @unchecked Sendable {
     /// Number of delay samples per channel: (2 * sections) + 2
-    /// Per Apple docs: Delay array should have length (2*M)+2 where M is sections
     private static let delayBufferSize = (2 * EQSettings.bandCount) + 2  // 22
 
     private let sampleRate: Double
 
-    // Atomic setup pointer for RT-safe swapping
-    private var eqSetup: vDSP_biquad_Setup?
+    // Lock-free state for RT-safe access
+    private nonisolated(unsafe) var _eqSetup: vDSP_biquad_Setup?
+    private nonisolated(unsafe) var _isEnabled: Bool = true
 
-    // Delay buffers (filter state) - one per channel
-    private var delayBufferL: [Float]
-    private var delayBufferR: [Float]
+    // Pre-allocated delay buffers (raw pointers for RT-safety)
+    private let delayBufferL: UnsafeMutablePointer<Float>
+    private let delayBufferR: UnsafeMutablePointer<Float>
 
-    // Current settings (for bypass check)
-    private(set) var isEnabled: Bool = true
+    /// Whether EQ processing is enabled
+    var isEnabled: Bool {
+        get { _isEnabled }
+    }
 
     init(sampleRate: Double) {
         self.sampleRate = sampleRate
-        self.delayBufferL = [Float](repeating: 0, count: Self.delayBufferSize)
-        self.delayBufferR = [Float](repeating: 0, count: Self.delayBufferSize)
+
+        // Allocate raw buffers (done once, on main thread)
+        delayBufferL = UnsafeMutablePointer<Float>.allocate(capacity: Self.delayBufferSize)
+        delayBufferL.initialize(repeating: 0, count: Self.delayBufferSize)
+
+        delayBufferR = UnsafeMutablePointer<Float>.allocate(capacity: Self.delayBufferSize)
+        delayBufferR.initialize(repeating: 0, count: Self.delayBufferSize)
 
         // Initialize with flat EQ
         updateSettings(EQSettings.flat)
     }
 
     deinit {
-        if let setup = eqSetup {
+        if let setup = _eqSetup {
             vDSP_biquad_DestroySetup(setup)
         }
+        delayBufferL.deallocate()
+        delayBufferR.deallocate()
     }
 
     /// Update EQ settings (call from main thread)
     func updateSettings(_ settings: EQSettings) {
-        isEnabled = settings.isEnabled
+        _isEnabled = settings.isEnabled
 
         let coefficients = BiquadMath.coefficientsForAllBands(
             gains: settings.clampedGains,
@@ -48,19 +58,19 @@ final class EQProcessor: @unchecked Sendable {
         }
 
         // Swap setup atomically
-        let oldSetup = eqSetup
-        eqSetup = newSetup
+        let oldSetup = _eqSetup
+        _eqSetup = newSetup
 
-        // Destroy old setup on background queue
+        // Destroy old setup on background queue (after audio thread has moved on)
         if let old = oldSetup {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.2) {
                 vDSP_biquad_DestroySetup(old)
             }
         }
 
-        // Reset delay buffers to prevent transient click
-        delayBufferL = [Float](repeating: 0, count: Self.delayBufferSize)
-        delayBufferR = [Float](repeating: 0, count: Self.delayBufferSize)
+        // Reset delay buffers using memset (RT-safe)
+        memset(delayBufferL, 0, Self.delayBufferSize * MemoryLayout<Float>.size)
+        memset(delayBufferR, 0, Self.delayBufferSize * MemoryLayout<Float>.size)
     }
 
     /// Process stereo interleaved audio (RT-safe)
@@ -69,8 +79,12 @@ final class EQProcessor: @unchecked Sendable {
     ///   - output: Output buffer (stereo interleaved Float32)
     ///   - frameCount: Number of stereo frames (samples / 2)
     func process(input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>, frameCount: Int) {
+        // Read atomic state
+        let enabled = _isEnabled
+        let setup = _eqSetup
+
         // Bypass: copy input to output
-        guard isEnabled, let setup = eqSetup else {
+        guard enabled, let setup = setup else {
             memcpy(output, input, frameCount * 2 * MemoryLayout<Float>.size)
             return
         }
@@ -79,29 +93,25 @@ final class EQProcessor: @unchecked Sendable {
         memcpy(output, input, frameCount * 2 * MemoryLayout<Float>.size)
 
         // Process left channel (stride=2, starts at index 0)
-        delayBufferL.withUnsafeMutableBufferPointer { delayPtr in
-            vDSP_biquad(
-                setup,
-                delayPtr.baseAddress!,
-                output,           // Input: left samples at indices 0, 2, 4...
-                2,                // Stride
-                output,           // Output: same positions
-                2,
-                vDSP_Length(frameCount)
-            )
-        }
+        vDSP_biquad(
+            setup,
+            delayBufferL,
+            output,
+            2,
+            output,
+            2,
+            vDSP_Length(frameCount)
+        )
 
         // Process right channel (stride=2, starts at index 1)
-        delayBufferR.withUnsafeMutableBufferPointer { delayPtr in
-            vDSP_biquad(
-                setup,
-                delayPtr.baseAddress!,
-                output.advanced(by: 1),  // Input: right samples at indices 1, 3, 5...
-                2,
-                output.advanced(by: 1),  // Output: same positions
-                2,
-                vDSP_Length(frameCount)
-            )
-        }
+        vDSP_biquad(
+            setup,
+            delayBufferR,
+            output.advanced(by: 1),
+            2,
+            output.advanced(by: 1),
+            2,
+            vDSP_Length(frameCount)
+        )
     }
 }
