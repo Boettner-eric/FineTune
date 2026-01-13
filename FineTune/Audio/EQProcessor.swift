@@ -1,9 +1,12 @@
 // FineTune/Audio/EQProcessor.swift
 import Foundation
 import Accelerate
+import os
 
 /// RT-safe 10-band graphic EQ processor using vDSP_biquad
 final class EQProcessor: @unchecked Sendable {
+    private let logger = Logger(subsystem: "com.finetune.audio", category: "EQProcessor")
+
     /// Number of delay samples per channel: (2 * sections) + 2
     private static let delayBufferSize = (2 * EQSettings.bandCount) + 2  // 22
 
@@ -87,15 +90,18 @@ final class EQProcessor: @unchecked Sendable {
     /// - Parameter newRate: The new device sample rate in Hz (e.g., 44100, 48000, 96000)
     func updateSampleRate(_ newRate: Double) {
         dispatchPrecondition(condition: .onQueue(.main))
+        let oldRate = sampleRate
         guard newRate != sampleRate else { return }  // No change needed
         guard let settings = _currentSettings else {
             // No settings applied yet, just update the rate for future use
             sampleRate = newRate
+            logger.info("[EQ] Sample rate updated: \(oldRate, format: .fixed(precision: 0))Hz → \(newRate, format: .fixed(precision: 0))Hz")
             return
         }
 
         // Update stored rate
         sampleRate = newRate
+        logger.info("[EQ] Sample rate updated: \(oldRate, format: .fixed(precision: 0))Hz → \(newRate, format: .fixed(precision: 0))Hz")
 
         // Recalculate coefficients with new sample rate
         let coefficients = BiquadMath.coefficientsForAllBands(
