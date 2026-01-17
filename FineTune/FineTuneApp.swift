@@ -1,16 +1,22 @@
 // FineTune/FineTuneApp.swift
 import SwiftUI
 import UserNotifications
+import FluidMenuBarExtra
 
 @main
 struct FineTuneApp: App {
     @State private var audioEngine: AudioEngine
+    @State private var showMenuBarExtra = true
 
     var body: some Scene {
-        MenuBarExtra("FineTune", systemImage: "slider.horizontal.3") {
-            MenuBarPopupView(audioEngine: audioEngine, deviceVolumeMonitor: audioEngine.deviceVolumeMonitor)
+        FluidMenuBarExtra("FineTune", image: "MenuBarIcon", isInserted: $showMenuBarExtra) {
+            MenuBarPopupView(
+                audioEngine: audioEngine,
+                deviceVolumeMonitor: audioEngine.deviceVolumeMonitor
+            )
         }
-        .menuBarExtraStyle(.window)
+
+        Settings { EmptyView() }
     }
 
     init() {
