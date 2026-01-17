@@ -78,9 +78,9 @@ final class EQProcessor: @unchecked Sendable {
             }
         }
 
-        // Reset delay buffers using memset (RT-safe)
-        memset(delayBufferL, 0, Self.delayBufferSize * MemoryLayout<Float>.size)
-        memset(delayBufferR, 0, Self.delayBufferSize * MemoryLayout<Float>.size)
+        // Note: Do NOT reset delay buffers here - the filter naturally adapts to new
+        // coefficients using existing state, producing smooth transitions without clicks.
+        // Delay buffers are only reset on init and sample rate changes.
     }
 
     /// Updates the sample rate and recalculates all biquad coefficients.

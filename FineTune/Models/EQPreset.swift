@@ -29,6 +29,37 @@ enum EQPreset: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    // MARK: - Categories
+
+    enum Category: String, CaseIterable, Identifiable {
+        case utility = "Utility"
+        case speech = "Speech"
+        case listening = "Listening"
+        case music = "Music"
+        case media = "Media"
+
+        var id: String { rawValue }
+    }
+
+    var category: Category {
+        switch self {
+        case .flat, .bassBoost, .bassCut, .trebleBoost:
+            return .utility
+        case .vocalClarity, .podcast, .spokenWord:
+            return .speech
+        case .loudness, .lateNight, .smallSpeakers:
+            return .listening
+        case .rock, .pop, .electronic, .jazz, .classical, .hipHop, .rnb, .deep, .acoustic:
+            return .music
+        case .movie:
+            return .media
+        }
+    }
+
+    static func presets(for category: Category) -> [EQPreset] {
+        allCases.filter { $0.category == category }
+    }
+
     var name: String {
         switch self {
         case .flat: return "Flat"
