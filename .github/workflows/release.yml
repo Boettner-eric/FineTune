@@ -9,9 +9,6 @@ jobs:
   build:
     runs-on: macos-14
 
-    env:
-      KEYCHAIN_PATH: ${{ runner.temp }}/build.keychain
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,6 +32,8 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+
           # Decode certificate
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
 
