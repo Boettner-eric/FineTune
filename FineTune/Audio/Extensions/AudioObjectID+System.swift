@@ -59,15 +59,19 @@ extension AudioObjectID {
 // MARK: - Default Device
 
 extension AudioDeviceID {
-    static func readDefaultSystemOutputDevice() throws -> AudioDeviceID {
+    /// Reads the main audio output device (what user selects in Sound preferences)
+    /// NOTE: Use DeviceVolumeMonitor.defaultDeviceUID when available, as it's cached and listener-updated
+    static func readDefaultOutputDevice() throws -> AudioDeviceID {
         try AudioObjectID.system.read(
-            kAudioHardwarePropertyDefaultSystemOutputDevice,
+            kAudioHardwarePropertyDefaultOutputDevice,  // Main audio output, NOT system alert sounds
             defaultValue: AudioDeviceID.unknown
         )
     }
 
-    static func readDefaultSystemOutputDeviceUID() throws -> String {
-        let deviceID = try readDefaultSystemOutputDevice()
+    /// Reads the UID of the main audio output device
+    /// NOTE: Use DeviceVolumeMonitor.defaultDeviceUID when available
+    static func readDefaultOutputDeviceUID() throws -> String {
+        let deviceID = try readDefaultOutputDevice()
         return try deviceID.readDeviceUID()
     }
 

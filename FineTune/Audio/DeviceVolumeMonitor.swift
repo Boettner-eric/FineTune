@@ -24,6 +24,9 @@ final class DeviceVolumeMonitor {
     /// Called when any device's mute state changes (deviceID, isMuted)
     var onMuteChanged: ((AudioDeviceID, Bool) -> Void)?
 
+    /// Called when the default output device changes (newDeviceUID)
+    var onDefaultDeviceChanged: ((String) -> Void)?
+
     private let deviceMonitor: AudioDeviceMonitor
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "DeviceVolumeMonitor")
 
@@ -187,8 +190,12 @@ final class DeviceVolumeMonitor {
     }
 
     private func handleDefaultDeviceChanged() {
+        let oldUID = defaultDeviceUID
         logger.debug("Default output device changed")
         refreshDefaultDevice()
+        if let newUID = defaultDeviceUID, newUID != oldUID {
+            onDefaultDeviceChanged?(newUID)
+        }
     }
 
     /// Synchronizes volume and mute listeners with the current device list from deviceMonitor
