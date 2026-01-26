@@ -17,7 +17,7 @@ enum MenuBarIconStyle: String, Codable, CaseIterable, Identifiable {
     var iconName: String {
         switch self {
         case .default: return "MenuBarIcon"
-        case .speaker: return "speaker.wave.2"
+        case .speaker: return "speaker.wave.2.fill"
         case .waveform: return "waveform"
         case .equalizer: return "slider.vertical.3"
         }
