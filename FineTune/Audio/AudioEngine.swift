@@ -39,11 +39,13 @@ final class AudioEngine {
             deviceVolumeMonitor.start()
 
             // Sync device volume changes to taps for VU meter accuracy
+            // For multi-device output, we track the primary (clock source) device's volume
             deviceVolumeMonitor.onVolumeChanged = { [weak self] deviceID, newVolume in
                 guard let self else { return }
                 guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
-                for (pid, tap) in self.taps {
-                    if self.appDeviceRouting[pid] == deviceUID {
+                for (_, tap) in self.taps {
+                    // Update if this is the tap's primary device
+                    if tap.currentDeviceUID == deviceUID {
                         tap.currentDeviceVolume = newVolume
                     }
                 }
@@ -53,8 +55,9 @@ final class AudioEngine {
             deviceVolumeMonitor.onMuteChanged = { [weak self] deviceID, isMuted in
                 guard let self else { return }
                 guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
-                for (pid, tap) in self.taps {
-                    if self.appDeviceRouting[pid] == deviceUID {
+                for (_, tap) in self.taps {
+                    // Update if this is the tap's primary device
+                    if tap.currentDeviceUID == deviceUID {
                         tap.isDeviceMuted = isMuted
                     }
                 }
@@ -220,17 +223,170 @@ final class AudioEngine {
         followsDefault.contains(app.id)
     }
 
+    // MARK: - Multi-Device Selection
+
+    /// Gets the device selection mode for an app
+    func getDeviceSelectionMode(for app: AudioApp) -> DeviceSelectionMode {
+        volumeState.getDeviceSelectionMode(for: app.id)
+    }
+
+    /// Sets the device selection mode for an app.
+    /// Triggers tap reconfiguration when mode changes.
+    func setDeviceSelectionMode(for app: AudioApp, to mode: DeviceSelectionMode) {
+        let previousMode = volumeState.getDeviceSelectionMode(for: app.id)
+        volumeState.setDeviceSelectionMode(for: app.id, to: mode, identifier: app.persistenceIdentifier)
+
+        guard previousMode != mode else { return }
+
+        Task {
+            await updateTapForCurrentMode(for: app)
+        }
+    }
+
+    /// Gets the selected device UIDs for multi-mode
+    func getSelectedDeviceUIDs(for app: AudioApp) -> Set<String> {
+        volumeState.getSelectedDeviceUIDs(for: app.id)
+    }
+
+    /// Sets the selected device UIDs for multi-mode.
+    /// Triggers tap reconfiguration when in multi mode.
+    func setSelectedDeviceUIDs(for app: AudioApp, to uids: Set<String>) {
+        let previousUIDs = volumeState.getSelectedDeviceUIDs(for: app.id)
+        volumeState.setSelectedDeviceUIDs(for: app.id, to: uids, identifier: app.persistenceIdentifier)
+
+        guard previousUIDs != uids,
+              getDeviceSelectionMode(for: app) == .multi else { return }
+
+        Task {
+            await updateTapForCurrentMode(for: app)
+        }
+    }
+
+    /// Updates tap configuration based on current mode and selected devices
+    private func updateTapForCurrentMode(for app: AudioApp) async {
+        let mode = getDeviceSelectionMode(for: app)
+
+        let deviceUIDs: [String]
+        switch mode {
+        case .single:
+            if isFollowingDefault(for: app), let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
+                deviceUIDs = [defaultUID]
+            } else if let deviceUID = appDeviceRouting[app.id] {
+                deviceUIDs = [deviceUID]
+            } else if let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
+                deviceUIDs = [defaultUID]
+            } else {
+                logger.warning("No device available for \(app.name) in single mode")
+                return
+            }
+
+        case .multi:
+            let selectedUIDs = getSelectedDeviceUIDs(for: app).sorted()
+            if selectedUIDs.isEmpty {
+                return
+            }
+            deviceUIDs = selectedUIDs
+        }
+
+        // Update or create tap with the device set
+        if let tap = taps[app.id] {
+            // Tap exists - update devices
+            if tap.currentDeviceUIDs != deviceUIDs {
+                do {
+                    try await tap.updateDevices(to: deviceUIDs)
+                    tap.volume = volumeState.getVolume(for: app.id)
+                    tap.isMuted = volumeState.getMute(for: app.id)
+                    // Update device volume for VU meter (use primary device)
+                    if let primaryUID = deviceUIDs.first,
+                       let device = deviceMonitor.device(for: primaryUID) {
+                        tap.currentDeviceVolume = deviceVolumeMonitor.volumes[device.id] ?? 1.0
+                        tap.isDeviceMuted = deviceVolumeMonitor.muteStates[device.id] ?? false
+                    }
+                    logger.debug("Updated \(app.name) to \(deviceUIDs.count) device(s)")
+                } catch {
+                    logger.error("Failed to update devices for \(app.name): \(error.localizedDescription)")
+                }
+            }
+        } else {
+            // No tap exists - create one
+            ensureTapWithDevices(for: app, deviceUIDs: deviceUIDs)
+        }
+    }
+
+    /// Creates a tap with the specified device UIDs
+    private func ensureTapWithDevices(for app: AudioApp, deviceUIDs: [String]) {
+        guard !deviceUIDs.isEmpty else { return }
+
+        let tap = ProcessTapController(app: app, targetDeviceUIDs: deviceUIDs, deviceMonitor: deviceMonitor)
+        tap.volume = volumeState.getVolume(for: app.id)
+
+        // Set initial device volume/mute for VU meter (use primary device)
+        if let primaryUID = deviceUIDs.first,
+           let device = deviceMonitor.device(for: primaryUID) {
+            tap.currentDeviceVolume = deviceVolumeMonitor.volumes[device.id] ?? 1.0
+            tap.isDeviceMuted = deviceVolumeMonitor.muteStates[device.id] ?? false
+        }
+
+        do {
+            try tap.activate()
+            taps[app.id] = tap
+
+            // Load and apply persisted EQ settings
+            let eqSettings = settingsManager.getEQSettings(for: app.persistenceIdentifier)
+            tap.updateEQSettings(eqSettings)
+
+            logger.debug("Created tap for \(app.name) on \(deviceUIDs.count) device(s)")
+        } catch {
+            logger.error("Failed to create tap for \(app.name): \(error.localizedDescription)")
+        }
+    }
+
     func applyPersistedSettings() {
         for app in apps {
             guard !appliedPIDs.contains(app.id) else { continue }
 
-            // Load saved device routing, determining whether app follows default
+            // Load saved device selection mode (single vs multi)
+            let savedMode = volumeState.loadSavedDeviceSelectionMode(for: app.id, identifier: app.persistenceIdentifier)
+            let mode = savedMode ?? .single
+
+            // Load saved volume and mute state
+            let savedVolume = volumeState.loadSavedVolume(for: app.id, identifier: app.persistenceIdentifier)
+            let savedMute = volumeState.loadSavedMute(for: app.id, identifier: app.persistenceIdentifier)
+
+            // Handle multi-device mode
+            if mode == .multi {
+                if let savedUIDs = volumeState.loadSavedSelectedDeviceUIDs(for: app.id, identifier: app.persistenceIdentifier),
+                   !savedUIDs.isEmpty {
+                    // Filter to currently available devices, maintaining deterministic order
+                    let availableUIDs = savedUIDs.filter { deviceMonitor.device(for: $0) != nil }
+                        .sorted()  // Deterministic ordering
+                    if !availableUIDs.isEmpty {
+                        logger.debug("Restoring multi-device mode for \(app.name) with \(availableUIDs.count) device(s)")
+                        ensureTapWithDevices(for: app, deviceUIDs: availableUIDs)
+
+                        // Mark as applied if tap created successfully
+                        guard taps[app.id] != nil else { continue }
+                        appliedPIDs.insert(app.id)
+
+                        // Apply volume and mute
+                        if let volume = savedVolume {
+                            taps[app.id]?.volume = volume
+                        }
+                        if let muted = savedMute, muted {
+                            taps[app.id]?.isMuted = true
+                        }
+                        continue  // Skip single-device path
+                    }
+                    // All saved devices unavailable - fall through to single-device mode
+                    logger.debug("All multi-mode devices unavailable for \(app.name), falling back to single mode")
+                }
+            }
+
+            // Single-device mode (or multi-mode fallback)
             let deviceUID: String
             if settingsManager.isFollowingDefault(for: app.persistenceIdentifier) {
                 // App follows system default (new app or explicitly set to follow)
                 followsDefault.insert(app.id)
-                // Use DeviceVolumeMonitor's cached default (tracks kAudioHardwarePropertyDefaultOutputDevice)
-                // Direct Core Audio calls should be avoided as they bypass the listener-updated cache
                 guard let defaultUID = deviceVolumeMonitor.defaultDeviceUID else {
                     logger.warning("No default device available for \(app.name), deferring setup")
                     continue
@@ -254,10 +410,6 @@ final class AudioEngine {
                 logger.debug("App \(app.name) device temporarily unavailable, using default: \(deviceUID)")
             }
             appDeviceRouting[app.id] = deviceUID
-
-            // Load saved volume and mute state
-            let savedVolume = volumeState.loadSavedVolume(for: app.id, identifier: app.persistenceIdentifier)
-            let savedMute = volumeState.loadSavedMute(for: app.id, identifier: app.persistenceIdentifier)
 
             // Always create tap for audio apps (always-on strategy)
             ensureTapExists(for: app, deviceUID: deviceUID)
@@ -310,55 +462,90 @@ final class AudioEngine {
     private func handleDeviceDisconnected(_ deviceUID: String, name deviceName: String) {
         // Get fallback device from DeviceVolumeMonitor's cached default (not direct Core Audio)
         // This ensures we use kAudioHardwarePropertyDefaultOutputDevice, not DefaultSystemOutputDevice
-        let fallbackDevice: (uid: String, name: String)
+        let fallbackDevice: (uid: String, name: String)?
         if let defaultUID = deviceVolumeMonitor.defaultDeviceUID,
            let device = deviceMonitor.device(for: defaultUID) {
             fallbackDevice = (uid: defaultUID, name: device.name)
         } else if let firstDevice = deviceMonitor.outputDevices.first {
             fallbackDevice = (uid: firstDevice.uid, name: firstDevice.name)
         } else {
-            logger.error("No fallback device available for disconnect")
-            return
+            fallbackDevice = nil
         }
 
         var affectedApps: [AudioApp] = []
-        var tapsToSwitch: [ProcessTapController] = []
+        var singleModeTapsToSwitch: [(tap: ProcessTapController, fallbackUID: String)] = []
+        var multiModeTapsToUpdate: [(tap: ProcessTapController, remainingUIDs: [String])] = []
 
         // Iterate over taps instead of apps - apps list may be empty if disconnected device
         // was the system default (CoreAudio removes app from process list when output disappears)
         for tap in taps.values {
             let app = tap.app
+            let mode = getDeviceSelectionMode(for: app)
 
-            if appDeviceRouting[app.id] == deviceUID {
-                affectedApps.append(app)
-                appDeviceRouting[app.id] = fallbackDevice.uid
+            // Check if this tap uses the disconnected device
+            guard tap.currentDeviceUIDs.contains(deviceUID) else { continue }
+
+            affectedApps.append(app)
+
+            if mode == .multi && tap.currentDeviceUIDs.count > 1 {
+                // Multi-device mode: remove disconnected device, keep others
+                let remainingUIDs = tap.currentDeviceUIDs.filter { $0 != deviceUID }.sorted()
+                if !remainingUIDs.isEmpty {
+                    multiModeTapsToUpdate.append((tap: tap, remainingUIDs: remainingUIDs))
+                    // Update in-memory selection to remove disconnected device (don't persist)
+                    var currentSelection = volumeState.getSelectedDeviceUIDs(for: app.id)
+                    currentSelection.remove(deviceUID)
+                    volumeState.setSelectedDeviceUIDs(for: app.id, to: currentSelection, identifier: nil)
+                    continue
+                }
+                // All devices gone in multi-mode, fall through to single-device fallback
+            }
+
+            // Single-device mode (or multi-mode with no remaining devices): switch to fallback
+            if let fallback = fallbackDevice {
+                appDeviceRouting[app.id] = fallback.uid
                 // Set to follow default in-memory (UI shows "System Audio")
                 // Don't persist - original device preference stays in settings for reconnection
                 followsDefault.insert(app.id)
-
-                tapsToSwitch.append(tap)
+                singleModeTapsToSwitch.append((tap: tap, fallbackUID: fallback.uid))
+            } else {
+                logger.error("No fallback device available for \(app.name)")
             }
         }
 
-        if !tapsToSwitch.isEmpty {
+        // Execute device switches
+        if !singleModeTapsToSwitch.isEmpty || !multiModeTapsToUpdate.isEmpty {
             Task {
-                for tap in tapsToSwitch {
+                // Handle single-mode switches
+                for (tap, fallbackUID) in singleModeTapsToSwitch {
                     do {
-                        try await tap.switchDevice(to: fallbackDevice.uid)
-                        // Restore saved volume/mute state after device switch
+                        try await tap.switchDevice(to: fallbackUID)
                         tap.volume = self.volumeState.getVolume(for: tap.app.id)
                         tap.isMuted = self.volumeState.getMute(for: tap.app.id)
                     } catch {
                         self.logger.error("Failed to switch \(tap.app.name) to fallback: \(error.localizedDescription)")
                     }
                 }
+
+                // Handle multi-mode updates (remove disconnected device from aggregate)
+                for (tap, remainingUIDs) in multiModeTapsToUpdate {
+                    do {
+                        try await tap.updateDevices(to: remainingUIDs)
+                        tap.volume = self.volumeState.getVolume(for: tap.app.id)
+                        tap.isMuted = self.volumeState.getMute(for: tap.app.id)
+                        self.logger.debug("Removed \(deviceName) from \(tap.app.name) multi-device output")
+                    } catch {
+                        self.logger.error("Failed to update \(tap.app.name) devices: \(error.localizedDescription)")
+                    }
+                }
             }
         }
 
         if !affectedApps.isEmpty {
-            logger.info("\(deviceName) disconnected, \(affectedApps.count) app(s) switched to \(fallbackDevice.name)")
+            let fallbackName = fallbackDevice?.name ?? "none"
+            logger.info("\(deviceName) disconnected, \(affectedApps.count) app(s) affected")
             if settingsManager.appSettings.showDeviceDisconnectAlerts {
-                showDisconnectNotification(deviceName: deviceName, fallbackName: fallbackDevice.name, affectedApps: affectedApps)
+                showDisconnectNotification(deviceName: deviceName, fallbackName: fallbackName, affectedApps: affectedApps)
             }
         }
     }
