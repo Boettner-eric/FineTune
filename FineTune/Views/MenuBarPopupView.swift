@@ -264,8 +264,10 @@ struct MenuBarPopupView: View {
                         isMuted: audioEngine.getMute(for: app),
                         devices: audioEngine.outputDevices,
                         selectedDeviceUID: deviceUID,
+                        selectedDeviceUIDs: audioEngine.getSelectedDeviceUIDs(for: app),
                         isFollowingDefault: audioEngine.isFollowingDefault(for: app),
                         defaultDeviceUID: deviceVolumeMonitor.defaultDeviceUID,
+                        deviceSelectionMode: audioEngine.getDeviceSelectionMode(for: app),
                         maxVolumeBoost: audioEngine.settingsManager.appSettings.maxVolumeBoost,
                         getAudioLevel: { audioEngine.getAudioLevel(for: app) },
                         isPopupVisible: isPopupVisible,
@@ -277,6 +279,12 @@ struct MenuBarPopupView: View {
                         },
                         onDeviceSelected: { newDeviceUID in
                             audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
+                        },
+                        onDevicesSelected: { uids in
+                            audioEngine.setSelectedDeviceUIDs(for: app, to: uids)
+                        },
+                        onDeviceModeChange: { mode in
+                            audioEngine.setDeviceSelectionMode(for: app, to: mode)
                         },
                         onSelectFollowDefault: {
                             audioEngine.setDevice(for: app, deviceUID: nil)

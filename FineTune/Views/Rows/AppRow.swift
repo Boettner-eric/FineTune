@@ -9,14 +9,18 @@ struct AppRow: View {
     let volume: Float  // Linear gain 0-maxVolumeBoost
     let audioLevel: Float
     let devices: [AudioDevice]
-    let selectedDeviceUID: String
+    let selectedDeviceUID: String  // For single mode
+    let selectedDeviceUIDs: Set<String>  // For multi mode
     let isFollowingDefault: Bool
     let defaultDeviceUID: String?
+    let deviceSelectionMode: DeviceSelectionMode
     let isMutedExternal: Bool  // Mute state from AudioEngine
     let maxVolumeBoost: Float  // Maximum volume multiplier (e.g., 2.0 = 200%, 4.0 = 400%)
     let onVolumeChange: (Float) -> Void
     let onMuteChange: (Bool) -> Void
-    let onDeviceSelected: (String) -> Void
+    let onDeviceSelected: (String) -> Void  // Single mode
+    let onDevicesSelected: (Set<String>) -> Void  // Multi mode
+    let onDeviceModeChange: (DeviceSelectionMode) -> Void
     let onSelectFollowDefault: () -> Void
     let onAppActivate: () -> Void
     let eqSettings: EQSettings
@@ -58,13 +62,17 @@ struct AppRow: View {
         audioLevel: Float = 0,
         devices: [AudioDevice],
         selectedDeviceUID: String,
+        selectedDeviceUIDs: Set<String> = [],
         isFollowingDefault: Bool = true,
         defaultDeviceUID: String? = nil,
+        deviceSelectionMode: DeviceSelectionMode = .single,
         isMuted: Bool = false,
         maxVolumeBoost: Float = 2.0,
         onVolumeChange: @escaping (Float) -> Void,
         onMuteChange: @escaping (Bool) -> Void,
         onDeviceSelected: @escaping (String) -> Void,
+        onDevicesSelected: @escaping (Set<String>) -> Void = { _ in },
+        onDeviceModeChange: @escaping (DeviceSelectionMode) -> Void = { _ in },
         onSelectFollowDefault: @escaping () -> Void = {},
         onAppActivate: @escaping () -> Void = {},
         eqSettings: EQSettings = EQSettings(),
@@ -77,13 +85,17 @@ struct AppRow: View {
         self.audioLevel = audioLevel
         self.devices = devices
         self.selectedDeviceUID = selectedDeviceUID
+        self.selectedDeviceUIDs = selectedDeviceUIDs
         self.isFollowingDefault = isFollowingDefault
         self.defaultDeviceUID = defaultDeviceUID
+        self.deviceSelectionMode = deviceSelectionMode
         self.isMutedExternal = isMuted
         self.maxVolumeBoost = maxVolumeBoost
         self.onVolumeChange = onVolumeChange
         self.onMuteChange = onMuteChange
         self.onDeviceSelected = onDeviceSelected
+        self.onDevicesSelected = onDevicesSelected
+        self.onDeviceModeChange = onDeviceModeChange
         self.onSelectFollowDefault = onSelectFollowDefault
         self.onAppActivate = onAppActivate
         self.eqSettings = eqSettings
@@ -182,13 +194,17 @@ struct AppRow: View {
                     // VU Meter (shows gray bars when muted or volume is 0)
                     VUMeter(level: audioLevel, isMuted: showMutedIcon)
 
-                    // Device picker
+                    // Device picker with single/multi mode support
                     DevicePicker(
                         devices: devices,
                         selectedDeviceUID: selectedDeviceUID,
+                        selectedDeviceUIDs: selectedDeviceUIDs,
                         isFollowingDefault: isFollowingDefault,
                         defaultDeviceUID: defaultDeviceUID,
+                        mode: deviceSelectionMode,
+                        onModeChange: onDeviceModeChange,
                         onDeviceSelected: onDeviceSelected,
+                        onDevicesSelected: onDevicesSelected,
                         onSelectFollowDefault: onSelectFollowDefault
                     )
 
@@ -254,14 +270,18 @@ struct AppRowWithLevelPolling: View {
     let isMuted: Bool
     let devices: [AudioDevice]
     let selectedDeviceUID: String
+    let selectedDeviceUIDs: Set<String>
     let isFollowingDefault: Bool
     let defaultDeviceUID: String?
+    let deviceSelectionMode: DeviceSelectionMode
     let maxVolumeBoost: Float
     let getAudioLevel: () -> Float
     let isPopupVisible: Bool
     let onVolumeChange: (Float) -> Void
     let onMuteChange: (Bool) -> Void
     let onDeviceSelected: (String) -> Void
+    let onDevicesSelected: (Set<String>) -> Void
+    let onDeviceModeChange: (DeviceSelectionMode) -> Void
     let onSelectFollowDefault: () -> Void
     let onAppActivate: () -> Void
     let eqSettings: EQSettings
@@ -278,14 +298,18 @@ struct AppRowWithLevelPolling: View {
         isMuted: Bool,
         devices: [AudioDevice],
         selectedDeviceUID: String,
+        selectedDeviceUIDs: Set<String> = [],
         isFollowingDefault: Bool = true,
         defaultDeviceUID: String? = nil,
+        deviceSelectionMode: DeviceSelectionMode = .single,
         maxVolumeBoost: Float = 2.0,
         getAudioLevel: @escaping () -> Float,
         isPopupVisible: Bool = true,
         onVolumeChange: @escaping (Float) -> Void,
         onMuteChange: @escaping (Bool) -> Void,
         onDeviceSelected: @escaping (String) -> Void,
+        onDevicesSelected: @escaping (Set<String>) -> Void = { _ in },
+        onDeviceModeChange: @escaping (DeviceSelectionMode) -> Void = { _ in },
         onSelectFollowDefault: @escaping () -> Void = {},
         onAppActivate: @escaping () -> Void = {},
         eqSettings: EQSettings = EQSettings(),
@@ -298,14 +322,18 @@ struct AppRowWithLevelPolling: View {
         self.isMuted = isMuted
         self.devices = devices
         self.selectedDeviceUID = selectedDeviceUID
+        self.selectedDeviceUIDs = selectedDeviceUIDs
         self.isFollowingDefault = isFollowingDefault
         self.defaultDeviceUID = defaultDeviceUID
+        self.deviceSelectionMode = deviceSelectionMode
         self.maxVolumeBoost = maxVolumeBoost
         self.getAudioLevel = getAudioLevel
         self.isPopupVisible = isPopupVisible
         self.onVolumeChange = onVolumeChange
         self.onMuteChange = onMuteChange
         self.onDeviceSelected = onDeviceSelected
+        self.onDevicesSelected = onDevicesSelected
+        self.onDeviceModeChange = onDeviceModeChange
         self.onSelectFollowDefault = onSelectFollowDefault
         self.onAppActivate = onAppActivate
         self.eqSettings = eqSettings
@@ -321,13 +349,17 @@ struct AppRowWithLevelPolling: View {
             audioLevel: displayLevel,
             devices: devices,
             selectedDeviceUID: selectedDeviceUID,
+            selectedDeviceUIDs: selectedDeviceUIDs,
             isFollowingDefault: isFollowingDefault,
             defaultDeviceUID: defaultDeviceUID,
+            deviceSelectionMode: deviceSelectionMode,
             isMuted: isMuted,
             maxVolumeBoost: maxVolumeBoost,
             onVolumeChange: onVolumeChange,
             onMuteChange: onMuteChange,
             onDeviceSelected: onDeviceSelected,
+            onDevicesSelected: onDevicesSelected,
+            onDeviceModeChange: onDeviceModeChange,
             onSelectFollowDefault: onSelectFollowDefault,
             onAppActivate: onAppActivate,
             eqSettings: eqSettings,
