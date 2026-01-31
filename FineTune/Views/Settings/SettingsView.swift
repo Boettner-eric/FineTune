@@ -84,6 +84,13 @@ struct SettingsView: View {
                 range: 1.0...4.0
             )
 
+            SettingsToggleRow(
+                icon: "mic",
+                title: "Lock Input Device",
+                description: "Prevent auto-switching when devices connect",
+                isOn: $settings.lockInputDevice
+            )
+
             // Sound Effects device selection
             SoundEffectsDeviceRow(
                 devices: outputDevices,

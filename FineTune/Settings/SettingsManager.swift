@@ -40,6 +40,9 @@ struct AppSettings: Codable, Equatable {
     var defaultNewAppVolume: Float = 1.0      // 100% (unity gain)
     var maxVolumeBoost: Float = 2.0           // 200% max
 
+    // Input Device Lock
+    var lockInputDevice: Bool = true          // Prevent auto-switching input device
+
     // Notifications
     var showDeviceDisconnectAlerts: Bool = true
 }
@@ -64,6 +67,7 @@ final class SettingsManager {
         var systemSoundsFollowsDefault: Bool = true  // Whether system sounds follows macOS default
         var appDeviceSelectionMode: [String: DeviceSelectionMode] = [:]  // bundleID → selection mode
         var appSelectedDeviceUIDs: [String: [String]] = [:]  // bundleID → array of device UIDs for multi mode
+        var lockedInputDeviceUID: String? = nil  // User's preferred input device (for input lock feature)
     }
 
     init(directory: URL? = nil) {
@@ -156,6 +160,17 @@ final class SettingsManager {
         scheduleSave()
     }
 
+    // MARK: - Input Device Lock
+
+    var lockedInputDeviceUID: String? {
+        settings.lockedInputDeviceUID
+    }
+
+    func setLockedInputDeviceUID(_ uid: String?) {
+        settings.lockedInputDeviceUID = uid
+        scheduleSave()
+    }
+
     // MARK: - App-Wide Settings
 
     var appSettings: AppSettings {
@@ -200,6 +215,7 @@ final class SettingsManager {
         settings.appEQSettings.removeAll()
         settings.appSettings = AppSettings()
         settings.systemSoundsFollowsDefault = true
+        settings.lockedInputDeviceUID = nil
 
         // Also unregister from launch at login
         try? SMAppService.mainApp.unregister()

@@ -333,7 +333,7 @@ struct MenuBarPopupView: View {
                         volume: deviceVolumeMonitor.inputVolumes[device.id] ?? 1.0,
                         isMuted: deviceVolumeMonitor.inputMuteStates[device.id] ?? false,
                         onSetDefault: {
-                            deviceVolumeMonitor.setDefaultInputDevice(device.id)
+                            audioEngine.setLockedInputDevice(device)
                         },
                         onVolumeChange: { volume in
                             deviceVolumeMonitor.setInputVolume(for: device.id, to: volume)

@@ -20,6 +20,17 @@ final class AudioEngine {
     private var pendingCleanup: [pid_t: Task<Void, Never>] = [:]  // Grace period for stale tap cleanup
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioEngine")
 
+    // MARK: - Input Device Lock State
+
+    /// Track if WE initiated the input change (to avoid revert loop)
+    private var didInitiateInputSwitch = false
+
+    /// Track when an input device was last connected (to distinguish auto-switch from user action)
+    private var lastInputDeviceConnectTime: Date?
+
+    /// Grace period to detect automatic device switching after connection (2 seconds)
+    private let autoSwitchGracePeriod: TimeInterval = 2.0
+
     var outputDevices: [AudioDevice] {
         deviceMonitor.outputDevices
     }
@@ -82,17 +93,30 @@ final class AudioEngine {
 
             deviceMonitor.onInputDeviceDisconnected = { [weak self] deviceUID, deviceName in
                 self?.logger.info("Input device disconnected: \(deviceName) (\(deviceUID))")
+                self?.handleInputDeviceDisconnected(deviceUID)
             }
 
             deviceMonitor.onInputDeviceConnected = { [weak self] deviceUID, deviceName in
                 self?.logger.info("Input device connected: \(deviceName) (\(deviceUID))")
+                self?.lastInputDeviceConnectTime = Date()
             }
 
             deviceVolumeMonitor.onDefaultDeviceChanged = { [weak self] newDefaultUID in
                 self?.handleDefaultDeviceChanged(newDefaultUID)
             }
 
+            deviceVolumeMonitor.onDefaultInputDeviceChanged = { [weak self] newDefaultInputUID in
+                Task { @MainActor [weak self] in
+                    self?.handleDefaultInputDeviceChanged(newDefaultInputUID)
+                }
+            }
+
             applyPersistedSettings()
+
+            // Restore locked input device if feature is enabled
+            if manager.appSettings.lockInputDevice {
+                restoreLockedInputDevice()
+            }
         }
     }
 
@@ -120,6 +144,12 @@ final class AudioEngine {
         processMonitor.start()
         deviceMonitor.start()
         applyPersistedSettings()
+
+        // Restore locked input device if feature is enabled
+        if settingsManager.appSettings.lockInputDevice {
+            restoreLockedInputDevice()
+        }
+
         logger.info("AudioEngine started")
     }
 
@@ -763,5 +793,89 @@ final class AudioEngine {
         appliedPIDs = appliedPIDs.intersection(pidsToKeep)
         followsDefault = followsDefault.intersection(pidsToKeep)
         volumeState.cleanup(keeping: pidsToKeep)
+    }
+
+    // MARK: - Input Device Lock
+
+    /// Handles changes to the default input device.
+    /// Uses timing heuristic to distinguish auto-switch (from device connection) vs user action.
+    private func handleDefaultInputDeviceChanged(_ newDefaultInputUID: String) {
+        // If WE initiated this change, just reset flag and return
+        if didInitiateInputSwitch {
+            didInitiateInputSwitch = false
+            return
+        }
+
+        // If lock is disabled, let system control input
+        guard settingsManager.appSettings.lockInputDevice else { return }
+
+        // Check if this change happened right after a device connection
+        let isAutoSwitch = lastInputDeviceConnectTime.map {
+            Date().timeIntervalSince($0) < autoSwitchGracePeriod
+        } ?? false
+
+        if isAutoSwitch {
+            // This is likely an automatic switch triggered by device connection
+            // Restore our locked device
+            logger.info("Auto-switch detected after device connection, restoring locked input device")
+            restoreLockedInputDevice()
+        } else {
+            // This is likely a user-initiated change (System Settings, another app, etc.)
+            // Respect their choice and update our locked device
+            logger.info("User changed input device to: \(newDefaultInputUID) - updating lock")
+            settingsManager.setLockedInputDeviceUID(newDefaultInputUID)
+        }
+    }
+
+    /// Restores the locked input device, or falls back to built-in mic if unavailable.
+    private func restoreLockedInputDevice() {
+        guard let lockedUID = settingsManager.lockedInputDeviceUID,
+              let lockedDevice = deviceMonitor.inputDevice(for: lockedUID) else {
+            // No locked device or it's unavailable - fall back to built-in
+            lockToBuiltInMicrophone()
+            return
+        }
+
+        // Don't restore if already on the locked device
+        guard deviceVolumeMonitor.defaultInputDeviceUID != lockedUID else { return }
+
+        logger.info("Restoring locked input device: \(lockedDevice.name)")
+        didInitiateInputSwitch = true
+        deviceVolumeMonitor.setDefaultInputDevice(lockedDevice.id)
+    }
+
+    /// Locks the input device to the built-in microphone.
+    private func lockToBuiltInMicrophone() {
+        guard let builtInMic = deviceMonitor.inputDevices.first(where: {
+            $0.id.readTransportType() == .builtIn
+        }) else {
+            logger.warning("No built-in microphone found")
+            return
+        }
+
+        setLockedInputDevice(builtInMic)
+    }
+
+    /// Called when user explicitly selects an input device (via FineTune UI).
+    /// Persists the choice and applies the change.
+    func setLockedInputDevice(_ device: AudioDevice) {
+        logger.info("User locked input device to: \(device.name)")
+
+        // Persist the choice
+        settingsManager.setLockedInputDeviceUID(device.uid)
+
+        // Apply the change
+        didInitiateInputSwitch = true
+        deviceVolumeMonitor.setDefaultInputDevice(device.id)
+    }
+
+    /// Handles locked input device disconnect - falls back to built-in mic.
+    private func handleInputDeviceDisconnected(_ deviceUID: String) {
+        // If the locked device disconnected, fall back to built-in mic
+        guard settingsManager.appSettings.lockInputDevice,
+              settingsManager.lockedInputDeviceUID == deviceUID else { return }
+
+        logger.info("Locked input device disconnected, falling back to built-in mic")
+        lockToBuiltInMicrophone()
     }
 }
