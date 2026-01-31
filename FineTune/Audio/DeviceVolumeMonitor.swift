@@ -208,6 +208,9 @@ final class DeviceVolumeMonitor {
         }
 
         startObservingInputDeviceList()
+
+        // Validate system sound state matches persisted preference
+        validateSystemSoundState()
     }
 
     func stop() {
@@ -392,7 +395,13 @@ final class DeviceVolumeMonitor {
             // If system sounds follows default, update it too
             if isSystemFollowingDefault && defaultDeviceID.isValid {
                 setSystemDevice(defaultDeviceID)
-                logger.debug("System sounds followed default to new device")
+                // Verify the operation succeeded
+                refreshSystemDevice()
+                if systemDeviceUID != defaultDeviceUID {
+                    logger.warning("Failed to sync system sounds to new default device")
+                } else {
+                    logger.debug("System sounds followed default to new device")
+                }
             }
         }
     }
@@ -419,9 +428,44 @@ final class DeviceVolumeMonitor {
         }
     }
 
+    /// Validates that persisted system sound state matches actual macOS state on startup.
+    /// If "follow default" is enabled but system device differs from default, enforces the preference.
+    private func validateSystemSoundState() {
+        guard defaultDeviceUID != nil, systemDeviceUID != nil else {
+            logger.debug("Cannot validate system sound state: missing device UIDs")
+            return
+        }
+
+        let systemMatchesDefault = (systemDeviceUID == defaultDeviceUID)
+
+        if isSystemFollowingDefault && !systemMatchesDefault {
+            // Persisted says "follow default" but actual state differs - enforce preference
+            if defaultDeviceID.isValid {
+                setSystemDevice(defaultDeviceID)
+                refreshSystemDevice()
+                if systemDeviceUID != defaultDeviceUID {
+                    logger.warning("Startup: failed to enforce system sounds to follow default")
+                } else {
+                    logger.info("Startup: enforced system sounds to follow default device")
+                }
+            }
+        }
+    }
+
     private func handleSystemDeviceChanged() {
         logger.debug("System output device changed")
         refreshSystemDevice()
+
+        // Detect if external change broke "follow default" state
+        if isSystemFollowingDefault {
+            let stillFollowing = (systemDeviceUID == defaultDeviceUID)
+            if !stillFollowing {
+                // External change broke "follow default" - update our state
+                isSystemFollowingDefault = false
+                settingsManager.setSystemSoundsFollowDefault(false)
+                logger.info("System device changed externally, no longer following default")
+            }
+        }
     }
 
     /// Sets the system output device (for alerts, notifications, system sounds)

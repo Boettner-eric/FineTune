@@ -77,6 +77,8 @@ struct MenuBarPopupView: View {
                     onResetAll: {
                         audioEngine.settingsManager.resetAllSettings()
                         localAppSettings = audioEngine.settingsManager.appSettings
+                        // Sync Core Audio: system sounds should follow default after reset
+                        deviceVolumeMonitor.setSystemFollowDefault()
                     },
                     deviceVolumeMonitor: deviceVolumeMonitor,
                     outputDevices: audioEngine.outputDevices
