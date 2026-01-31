@@ -123,3 +123,41 @@ extension AudioDeviceID {
         }
     }
 }
+
+// MARK: - Default Input Device
+
+extension AudioDeviceID {
+    /// Reads the main audio input device (microphone selected in Sound preferences)
+    /// NOTE: Use DeviceVolumeMonitor.defaultInputDeviceUID when available, as it's cached and listener-updated
+    static func readDefaultInputDevice() throws -> AudioDeviceID {
+        try AudioObjectID.system.read(
+            kAudioHardwarePropertyDefaultInputDevice,
+            defaultValue: AudioDeviceID.unknown
+        )
+    }
+
+    /// Reads the UID of the main audio input device
+    /// NOTE: Use DeviceVolumeMonitor.defaultInputDeviceUID when available
+    static func readDefaultInputDeviceUID() throws -> String {
+        let deviceID = try readDefaultInputDevice()
+        return try deviceID.readDeviceUID()
+    }
+
+    /// Sets the default input device (microphone)
+    static func setDefaultInputDevice(_ deviceID: AudioDeviceID) throws {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceIDValue = deviceID
+        let size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let err = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil, size, &deviceIDValue
+        )
+        guard err == noErr else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(err))
+        }
+    }
+}
