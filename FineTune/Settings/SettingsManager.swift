@@ -3,6 +3,14 @@ import Foundation
 import os
 import ServiceManagement
 
+// MARK: - Pinned App Info
+
+struct PinnedAppInfo: Codable, Equatable {
+    let persistenceIdentifier: String
+    let displayName: String
+    let bundleID: String?
+}
+
 // MARK: - App-Wide Settings Enums
 
 enum MenuBarIconStyle: String, Codable, CaseIterable, Identifiable {
