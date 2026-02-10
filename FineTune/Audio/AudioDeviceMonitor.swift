@@ -112,16 +112,14 @@ final class AudioDeviceMonitor {
 
             for deviceID in deviceIDs {
                 guard !deviceID.isAggregateDevice() else { continue }
-                // Filter virtual audio devices (e.g., Microsoft Teams Audio, BlackHole)
-                guard !deviceID.isVirtualDevice() else { continue }
 
                 guard let uid = try? deviceID.readDeviceUID(),
                       let name = try? deviceID.readDeviceName() else {
                     continue
                 }
 
-                // Output devices
-                if deviceID.hasOutputStreams() {
+                // Output devices - filter virtual devices (avoid clutter from Teams Audio, BlackHole, etc.)
+                if deviceID.hasOutputStreams() && !deviceID.isVirtualDevice() {
                     // Try Core Audio icon first (via LRU cache), fall back to SF Symbol
                     let icon = DeviceIconCache.shared.icon(for: uid) {
                         deviceID.readDeviceIcon()
@@ -136,8 +134,13 @@ final class AudioDeviceMonitor {
                     outputDeviceList.append(device)
                 }
 
-                // Input devices
+                // Input devices - allow virtual devices but filter zombies
                 if deviceID.hasInputStreams() {
+                    // Skip zombie virtual devices (registered but not functional, e.g., Teams Audio when Teams not running)
+                    if deviceID.isVirtualDevice() && !deviceID.isDeviceAlive() {
+                        continue
+                    }
+
                     // Try Core Audio icon first, fall back to smart detection
                     let icon = DeviceIconCache.shared.icon(for: uid) {
                         deviceID.readDeviceIcon()
