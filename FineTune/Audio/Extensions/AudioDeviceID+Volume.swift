@@ -12,9 +12,9 @@ extension AudioDeviceID {
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectHasProperty(self, &address) else { return false }
+        guard AudioHardwareServiceHasProperty(self, &address) else { return false }
         var settable: DarwinBoolean = false
-        let err = AudioObjectIsPropertySettable(self, &address, &settable)
+        let err = AudioHardwareServiceIsPropertySettable(self, &address, &settable)
         return err == noErr && settable.boolValue
     }
 }
@@ -36,10 +36,10 @@ extension AudioDeviceID {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        if AudioObjectHasProperty(self, &address) {
+        if AudioHardwareServiceHasProperty(self, &address) {
             var volume: Float32 = 1.0
             var size = UInt32(MemoryLayout<Float32>.size)
-            let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &volume)
+            let err = AudioHardwareServiceGetPropertyData(self, &address, 0, nil, &size, &volume)
             if err == noErr {
                 return volume
             }
@@ -88,13 +88,13 @@ extension AudioDeviceID {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        guard AudioObjectHasProperty(self, &address) else {
+        guard AudioHardwareServiceHasProperty(self, &address) else {
             return false
         }
 
         var volumeValue: Float32 = clampedVolume
         let size = UInt32(MemoryLayout<Float32>.size)
-        let err = AudioObjectSetPropertyData(self, &address, 0, nil, size, &volumeValue)
+        let err = AudioHardwareServiceSetPropertyData(self, &address, 0, nil, size, &volumeValue)
         return err == noErr
     }
 }
@@ -158,10 +158,10 @@ extension AudioDeviceID {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        if AudioObjectHasProperty(self, &address) {
+        if AudioHardwareServiceHasProperty(self, &address) {
             var volume: Float32 = 1.0
             var size = UInt32(MemoryLayout<Float32>.size)
-            let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &volume)
+            let err = AudioHardwareServiceGetPropertyData(self, &address, 0, nil, &size, &volume)
             if err == noErr {
                 return volume
             }
@@ -210,13 +210,13 @@ extension AudioDeviceID {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        guard AudioObjectHasProperty(self, &address) else {
+        guard AudioHardwareServiceHasProperty(self, &address) else {
             return false
         }
 
         var volumeValue: Float32 = clampedVolume
         let size = UInt32(MemoryLayout<Float32>.size)
-        let err = AudioObjectSetPropertyData(self, &address, 0, nil, size, &volumeValue)
+        let err = AudioHardwareServiceSetPropertyData(self, &address, 0, nil, size, &volumeValue)
         return err == noErr
     }
 }
