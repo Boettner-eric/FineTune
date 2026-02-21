@@ -52,22 +52,45 @@ enum CrossfadeConfig {
 /// The main crossfade orchestration stays in ProcessTapController to maintain
 /// direct access to RT-safe state without introducing virtual dispatch.
 enum CrossfadeOrchestrator {
-    /// Destroys a tap and its associated aggregate device.
+    private static let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "CrossfadeOrchestrator")
+
+    /// Destroys a tap and its associated aggregate device in the correct teardown order:
+    /// 1. Stop device proc → 2. Destroy IO proc → 3. Destroy aggregate → 4. Destroy tap
     /// Safe to call with invalid IDs - they will be skipped.
     static func destroyTap(
         aggregateID: AudioObjectID,
         deviceProcID: AudioDeviceIOProcID?,
         tapID: AudioObjectID
     ) {
+        // Step 1 & 2: Stop and destroy IO proc
         if aggregateID.isValid {
-            AudioDeviceStop(aggregateID, deviceProcID)
             if let procID = deviceProcID {
-                AudioDeviceDestroyIOProcID(aggregateID, procID)
+                let stopErr = AudioDeviceStop(aggregateID, procID)
+                if stopErr != noErr {
+                    logger.error("AudioDeviceStop failed for aggregate \(aggregateID): OSStatus \(stopErr)")
+                }
+                let destroyProcErr = AudioDeviceDestroyIOProcID(aggregateID, procID)
+                if destroyProcErr != noErr {
+                    logger.error("AudioDeviceDestroyIOProcID failed for aggregate \(aggregateID): OSStatus \(destroyProcErr)")
+                }
             }
-            AudioHardwareDestroyAggregateDevice(aggregateID)
         }
+
+        // Step 3: Destroy aggregate device
+        if aggregateID.isValid {
+            CrashGuard.untrackDevice(aggregateID)
+            let aggErr = AudioHardwareDestroyAggregateDevice(aggregateID)
+            if aggErr != noErr {
+                logger.error("AudioHardwareDestroyAggregateDevice failed for \(aggregateID): OSStatus \(aggErr)")
+            }
+        }
+
+        // Step 4: Destroy process tap
         if tapID.isValid {
-            AudioHardwareDestroyProcessTap(tapID)
+            let tapErr = AudioHardwareDestroyProcessTap(tapID)
+            if tapErr != noErr {
+                logger.error("AudioHardwareDestroyProcessTap failed for \(tapID): OSStatus \(tapErr)")
+            }
         }
     }
 }
