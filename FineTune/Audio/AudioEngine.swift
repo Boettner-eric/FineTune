@@ -32,11 +32,14 @@ final class AudioEngine {
     /// Track when an input device was last connected (to distinguish auto-switch from user action)
     private var lastInputDeviceConnectTime: Date?
 
-    /// Grace period to detect automatic device switching after connection (2 seconds)
+    /// Grace period to detect automatic device switching after connection
     private let autoSwitchGracePeriod: TimeInterval = 2.0
 
-    /// Last priority-based default override UID to suppress echo callbacks
-    private var lastPriorityDefaultOverrideUID: String?
+    /// Extended grace period for Bluetooth devices (firmware handshake takes longer)
+    private let btAutoSwitchGracePeriod: TimeInterval = 5.0
+
+    /// UIDs of priority-based default overrides pending echo suppression (handles rapid disconnects)
+    private var pendingPriorityOverrideUIDs: Set<String> = []
 
     /// Tracks the last known default output device UID for disconnect detection
     private var lastKnownDefaultDeviceUID: String?
@@ -869,7 +872,7 @@ final class AudioEngine {
         if wasDefaultOutput,
            let fallback = fallbackDevice,
            let fallbackAudioDevice = deviceMonitor.device(for: fallback.uid) {
-            lastPriorityDefaultOverrideUID = fallback.uid
+            pendingPriorityOverrideUIDs.insert(fallback.uid)
             deviceVolumeMonitor.setDefaultDevice(fallbackAudioDevice.id)
             logger.info("System default overridden to priority fallback: \(fallback.name)")
         }
@@ -975,12 +978,9 @@ final class AudioEngine {
         lastKnownDefaultDeviceUID = newDefaultUID
 
         // Suppress echo from our own priority-based override (UID match only)
-        if let overrideUID = lastPriorityDefaultOverrideUID,
-           newDefaultUID == overrideUID {
-            lastPriorityDefaultOverrideUID = nil
+        if pendingPriorityOverrideUIDs.remove(newDefaultUID) != nil {
             return
         }
-        lastPriorityDefaultOverrideUID = nil
 
         // If the old default device was disconnected, override to priority fallback.
         // Use isDeviceAlive() to query Core Audio directly (cache may be stale).
@@ -990,7 +990,7 @@ final class AudioEngine {
             if let fallback = findPriorityFallbackDevice(excluding: oldUID),
                fallback.uid != newDefaultUID,
                let fallbackDevice = deviceMonitor.device(for: fallback.uid) {
-                lastPriorityDefaultOverrideUID = fallback.uid
+                pendingPriorityOverrideUIDs.insert(fallback.uid)
                 deviceVolumeMonitor.setDefaultDevice(fallbackDevice.id)
                 logger.info("System default overridden to priority fallback: \(fallback.name)")
                 return
@@ -1065,12 +1065,24 @@ final class AudioEngine {
         let activePIDs = Set(apps.map { $0.id })
         let stalePIDs = Set(taps.keys).subtracting(activePIDs)
 
-        // Cancel cleanup for PIDs that reappeared
+        // Cancel cleanup for PIDs that reappeared — but only if bundleID matches.
+        // PID reuse by a different app should not rescue the old tap.
         for pid in activePIDs {
-            if let task = pendingCleanup.removeValue(forKey: pid) {
-                task.cancel()
-                logger.debug("Cancelled pending cleanup for PID \(pid) - app reappeared")
+            guard let task = pendingCleanup[pid] else { continue }
+
+            let reappearedApp = apps.first { $0.id == pid }
+            let existingTap = taps[pid]
+
+            if let reappearedApp, let existingTap,
+               reappearedApp.bundleID != existingTap.app.bundleID {
+                // PID was reused by a different app — let the old tap be destroyed
+                logger.debug("PID \(pid) reused by different app (\(reappearedApp.bundleID ?? "nil") vs \(existingTap.app.bundleID ?? "nil")), not cancelling cleanup")
+                continue
             }
+
+            pendingCleanup.removeValue(forKey: pid)
+            task.cancel()
+            logger.debug("Cancelled pending cleanup for PID \(pid) - app reappeared")
         }
 
         // Schedule cleanup for newly stale PIDs (with grace period)
@@ -1143,9 +1155,20 @@ final class AudioEngine {
         // If lock is disabled, let system control input
         guard settingsManager.appSettings.lockInputDevice else { return }
 
-        // Check if this change happened right after a device connection
+        // Check if this change happened right after a device connection.
+        // Bluetooth devices need a longer grace period due to firmware handshake latency.
+        let gracePeriod: TimeInterval
+        if let newDevice = deviceMonitor.inputDevice(for: newDefaultInputUID) {
+            let transport = newDevice.id.readTransportType()
+            gracePeriod = (transport == .bluetooth || transport == .bluetoothLE)
+                ? btAutoSwitchGracePeriod
+                : autoSwitchGracePeriod
+        } else {
+            gracePeriod = autoSwitchGracePeriod
+        }
+
         let isAutoSwitch = lastInputDeviceConnectTime.map {
-            Date().timeIntervalSince($0) < autoSwitchGracePeriod
+            Date().timeIntervalSince($0) < gracePeriod
         } ?? false
 
         if isAutoSwitch {
