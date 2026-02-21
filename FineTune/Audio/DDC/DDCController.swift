@@ -25,8 +25,9 @@ final class DDCController {
     private var deviceUIDs: [AudioDeviceID: String] = [:]  // For persistence keying
     private var debounceTimers: [AudioDeviceID: DispatchWorkItem] = [:]
     private var probeWorkItem: DispatchWorkItem?
+    private var displayChangeObserver: NSObjectProtocol?
 
-    private let ddcQueue = DispatchQueue(label: "com.finetune.ddc", qos: .userInitiated)
+    private let ddcQueue = DispatchQueue(label: "com.finetune.ddc", qos: .utility)
     private let settingsManager: SettingsManager
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "DDCController")
 
@@ -42,6 +43,17 @@ final class DDCController {
     func start() {
         probe()
         setupDisplayChangeObserver()
+    }
+
+    func stop() {
+        if let obs = displayChangeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            displayChangeObserver = nil
+        }
+        probeWorkItem?.cancel()
+        probeWorkItem = nil
+        for (_, item) in debounceTimers { item.cancel() }
+        debounceTimers.removeAll()
     }
 
     // MARK: - Public API
@@ -88,6 +100,8 @@ final class DDCController {
             settingsManager.setDDCSavedVolume(for: uid, to: currentVolume)
         }
         settingsManager.setDDCMuteState(for: uid, to: true)
+        // Flush immediately so pre-mute volume survives a crash
+        settingsManager.flushSync()
         setVolume(for: deviceID, to: 0)
     }
 
@@ -109,6 +123,13 @@ final class DDCController {
 
     /// Probes for DDC-capable displays on a background queue, then matches to CoreAudio devices.
     private func probe() {
+        // Cancel pending debounced DDC writes — services will be replaced by re-probe
+        for (_, item) in debounceTimers { item.cancel() }
+        debounceTimers.removeAll()
+
+        // TODO(Swift 6): This closure captures @MainActor self and runs on ddcQueue.
+        // Currently safe because accessed properties are nonisolated or dispatched
+        // to @MainActor via Task { @MainActor in }.
         ddcQueue.async { [weak self] in
             guard let self else { return }
 
@@ -289,6 +310,8 @@ final class DDCController {
         IOObjectRetain(current)
 
         // Try up to 10 levels of parents to find display info
+        // `needsRelease` tracks whether `current` holds an unreleased io_service_t
+        var needsRelease = true
         for _ in 0..<10 {
             if let name = displayNameFromEntry(current) {
                 IOObjectRelease(current)
@@ -298,8 +321,16 @@ final class DDCController {
             var next: io_registry_entry_t = 0
             let kr = IORegistryEntryGetParentEntry(current, kIOServicePlane, &next)
             IOObjectRelease(current)
-            guard kr == kIOReturnSuccess else { break }
+            guard kr == kIOReturnSuccess else {
+                needsRelease = false  // `current` was already released above
+                break
+            }
             current = next
+        }
+
+        // Release the final `current` if the loop exhausted all 10 levels
+        if needsRelease {
+            IOObjectRelease(current)
         }
 
         // No display name found in registry hierarchy
@@ -318,7 +349,7 @@ final class DDCController {
     // MARK: - Display Change Observer
 
     private func setupDisplayChangeObserver() {
-        NotificationCenter.default.addObserver(
+        displayChangeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
