@@ -76,6 +76,7 @@ final class ProcessTapController {
     private nonisolated(unsafe) var rampCoefficient: Float = 0.0007
     private nonisolated(unsafe) var secondaryRampCoefficient: Float = 0.0007
     private nonisolated(unsafe) var eqProcessor: EQProcessor?
+    private nonisolated(unsafe) var compressorProcessor: CompressorProcessor?
 
     // Target device UIDs for synchronized multi-output (first is clock source)
     private var targetDeviceUIDs: [String]
@@ -142,6 +143,10 @@ final class ProcessTapController {
 
     func updateEQSettings(_ settings: EQSettings) {
         eqProcessor?.updateSettings(settings)
+    }
+
+    func updateCompressorSettings(_ settings: CompressorSettings) {
+        compressorProcessor?.updateSettings(settings)
     }
 
     // MARK: - Multi-Device Aggregate Configuration
@@ -245,6 +250,7 @@ final class ProcessTapController {
         logger.debug("Ramp coefficient: \(self.rampCoefficient)")
 
         eqProcessor = EQProcessor(sampleRate: sampleRate)
+        compressorProcessor = CompressorProcessor(sampleRate: sampleRate)
 
         // Create IO proc with gain processing
         err = AudioDeviceCreateIOProcIDWithBlock(&primaryResources.deviceProcID, primaryResources.aggregateDeviceID, queue) { [weak self] _, inInputData, _, outOutputData, _ in
@@ -543,6 +549,7 @@ final class ProcessTapController {
             let rampTimeSeconds: Float = 0.030
             rampCoefficient = 1 - exp(-1 / (Float(deviceSampleRate) * rampTimeSeconds))
             eqProcessor?.updateSampleRate(deviceSampleRate)
+            compressorProcessor?.updateSampleRate(deviceSampleRate)
         }
 
         _primaryCurrentVolume = _secondaryCurrentVolume
@@ -649,6 +656,7 @@ final class ProcessTapController {
         if let deviceSampleRate = try? primaryResources.aggregateDeviceID.readNominalSampleRate() {
             rampCoefficient = 1 - exp(-1 / (Float(deviceSampleRate) * 0.030))
             eqProcessor?.updateSampleRate(deviceSampleRate)
+            compressorProcessor?.updateSampleRate(deviceSampleRate)
         }
     }
 
@@ -766,20 +774,31 @@ final class ProcessTapController {
             // (currentVol += (target - current) * coeff) gives smooth transitions.
             for i in 0..<sampleCount {
                 currentVol += (targetVol - currentVol) * rampCoefficient
-                let sample = inputSamples[i] * currentVol * crossfadeMultiplier * preamp
+                let sample = inputSamples[i] * currentVol * crossfadeMultiplier
                 outputSamples[i] = sample
             }
 
-            // EQ intentionally disabled during crossfade: biquad delay buffers contain
-            // state tuned to the old device's sample rate. Processing through them produces
-            // incorrect frequency response. The ~50ms crossfade gap is inaudible.
-            if let eq = eq, !crossfadeState.isActive {
-                let channels = Int(inputBuffer.mNumberChannels)
-                let frameCount = channels > 1 ? sampleCount / channels : sampleCount
-                eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+            // EQ/compressor intentionally disabled during crossfade: delay/envelope state is
+            // tuned to the old device's sample rate. The ~50ms crossfade gap is inaudible.
+            let compressor = compressorProcessor  // Match EQ pattern; single RT-safe read
+            if !crossfadeState.isActive {
+                let channels = max(Int(inputBuffer.mNumberChannels), 1)
+                let frameCount = sampleCount / channels
+                if let compressor {
+                    compressor.process(buffer: outputSamples, frameCount: frameCount, channels: channels)
+                }
+                if let eq {
+                    // Keep preamp in the EQ stage: Gain -> Compressor -> EQ.
+                    if preamp != 1.0 {
+                        for sampleIndex in 0..<sampleCount {
+                            outputSamples[sampleIndex] *= preamp
+                        }
+                    }
+                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+                }
             }
 
-            // Post-EQ soft limiting: catches any clipping from EQ boost or volume > 1.0.
+            // Post-processing soft limiting: catches clipping from EQ/compressor/volume boosts.
             // Uses vDSP_maxmgv fast path — zero overhead when buffer is below threshold.
             SoftLimiter.processBuffer(outputSamples, sampleCount: sampleCount)
         }
@@ -866,20 +885,31 @@ final class ProcessTapController {
 
             for i in 0..<sampleCount {
                 currentVol += (targetVol - currentVol) * secondaryRampCoefficient
-                let sample = inputSamples[i] * currentVol * crossfadeMultiplier * preamp
+                let sample = inputSamples[i] * currentVol * crossfadeMultiplier
                 outputSamples[i] = sample
             }
 
-            // EQ intentionally disabled during crossfade: biquad delay buffers contain
-            // state tuned to the old device's sample rate. Processing through them produces
-            // incorrect frequency response. The ~50ms crossfade gap is inaudible.
-            if let eq = eq, !crossfadeState.isActive {
-                let channels = Int(inputBuffer.mNumberChannels)
-                let frameCount = channels > 1 ? sampleCount / channels : sampleCount
-                eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+            // EQ/compressor intentionally disabled during crossfade: delay/envelope state is
+            // tuned to the old device's sample rate. The ~50ms crossfade gap is inaudible.
+            let compressor = compressorProcessor  // Match EQ pattern; single RT-safe read
+            if !crossfadeState.isActive {
+                let channels = max(Int(inputBuffer.mNumberChannels), 1)
+                let frameCount = sampleCount / channels
+                if let compressor {
+                    compressor.process(buffer: outputSamples, frameCount: frameCount, channels: channels)
+                }
+                if let eq {
+                    // Keep preamp in the EQ stage: Gain -> Compressor -> EQ.
+                    if preamp != 1.0 {
+                        for sampleIndex in 0..<sampleCount {
+                            outputSamples[sampleIndex] *= preamp
+                        }
+                    }
+                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+                }
             }
 
-            // Post-EQ soft limiting: catches any clipping from EQ boost or volume > 1.0.
+            // Post-processing soft limiting: catches clipping from EQ/compressor/volume boosts.
             // Uses vDSP_maxmgv fast path — zero overhead when buffer is below threshold.
             SoftLimiter.processBuffer(outputSamples, sampleCount: sampleCount)
         }
